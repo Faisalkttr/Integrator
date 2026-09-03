@@ -60,21 +60,26 @@ def build_pdf_report(
     n = len(scored)
     euphoria = int(scored["Euphoria Veto"].sum())
     traps = int(scored["Liquidity Trap"].sum())
-    q1a = int((scored["Quadrant"] == "Q1A: Institutional Sweet Spot").sum())
-    q1 = int((scored["Quadrant"] == "Q1: Macro Anchor").sum())
-    q2 = int((scored["Quadrant"] == "Q2: Tripwire Watchlist").sum())
-    q3 = int((scored["Quadrant"] == "Q3: Rented Momentum").sum())
-    q4 = int((scored["Quadrant"] == "Q4: Broken").sum())
+    quadrant_counts = scored["Quadrant"].value_counts()
     total_alloc = scored["Computed Allocation ($)"].sum()
+
+    quadrant_summary = ", ".join(
+        f"{name}: {int(quadrant_counts.get(name, 0))}"
+        for name in [
+            "Q1A: Institutional Sweet Spot", "Q1: Macro Anchor", "Q1B: Momentum Building",
+            "Q1C: Building Conviction", "Q2: Tripwire Watchlist", "Q3: Rented Momentum",
+            "Watch: Neutral Zone", "Q4B: Fundamentals Fading", "Q4C: Technical Breakdown",
+            "Q4: Broken",
+        ]
+    )
 
     story.append(Paragraph("Executive Summary", h2))
     story.append(Paragraph(
-        f"{n} assets scored across both engines this cycle. Q1A Institutional Sweet Spot: {q1a}, "
-        f"Q1 Macro Anchor: {q1}, Q2 Tripwire Watchlist: {q2}, Q3 Rented Momentum: {q3}, "
-        f"Q4 Broken: {q4}. {euphoria} euphoria-veto flags and {traps} liquidity-trap flags were "
-        f"triggered; scores for those names were discounted (\u00d70.60 and \u00d70.70 respectively) "
-        f"and new deployment was zeroed out. Total suggested new deployment across "
-        f"non-vetoed names: ${total_alloc:,.0f}.", body,
+        f"{n} assets scored across both engines this cycle. Breakdown by quadrant \u2014 "
+        f"{quadrant_summary}. {euphoria} euphoria-veto flags and {traps} liquidity-trap flags "
+        f"were triggered; scores for those names were discounted (\u00d70.60 and \u00d70.70 "
+        f"respectively) and new deployment was zeroed out. Total suggested new deployment "
+        f"across non-vetoed names: ${total_alloc:,.0f}.", body,
     ))
 
     # Top buys
@@ -85,11 +90,12 @@ def build_pdf_report(
     cols = [TECH_KEY, "Simon Score", "Momentum Score", "Valuation Score", "Quadrant", "Computed Allocation ($)"]
     story.append(_table_from_df(top_buys, cols))
 
-    # Sub-score breakdown for Q1A / Q1 names
-    story.append(Paragraph("Sub-Score Breakdown \u2014 Macro Anchors (Q1A + Q1)", h2))
-    anchors = scored[scored["Quadrant"].isin(
-        ["Q1A: Institutional Sweet Spot", "Q1: Macro Anchor"]
-    )].sort_values("Simon Score", ascending=False)
+    # Sub-score breakdown for anchor / building names
+    story.append(Paragraph("Sub-Score Breakdown \u2014 Anchors & Building Names", h2))
+    anchors = scored[scored["Quadrant"].isin([
+        "Q1A: Institutional Sweet Spot", "Q1: Macro Anchor",
+        "Q1B: Momentum Building", "Q1C: Building Conviction",
+    ])].sort_values("Simon Score", ascending=False)
     anchor_cols = [TECH_KEY, "Quadrant", "Momentum Score", "Quality Composite",
                    "Valuation Score", "Crisis Resilience Score", "Simon Score"]
     if anchors.empty:
