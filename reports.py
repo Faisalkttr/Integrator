@@ -1,0 +1,145 @@
+"""PDF investment-committee report builder."""
+
+import io
+
+import pandas as pd
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak,
+)
+
+TECH_KEY = "Asset"
+
+
+def _table_from_df(df: pd.DataFrame, cols, col_widths=None):
+    cols = [c for c in cols if c in df.columns]
+    data = [cols] + df[cols].astype(str).values.tolist()
+    t = Table(data, colWidths=col_widths, repeatRows=1)
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f5f5")]),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    return t
+
+
+def build_pdf_report(
+    scored: pd.DataFrame,
+    tripwires: pd.DataFrame,
+    rebalance_df: pd.DataFrame,
+    total_capital: float,
+    date_str: str,
+    regime: str = "Neutral (no adjustment)",
+) -> bytes:
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=letter,
+        topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+        leftMargin=0.6 * inch, rightMargin=0.6 * inch,
+    )
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontSize=18, spaceAfter=6)
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontSize=13, spaceBefore=14, spaceAfter=6)
+    body = styles["BodyText"]
+
+    story = []
+    story.append(Paragraph("Monthly Investment Committee Report", h1))
+    story.append(Paragraph(
+        f"Generated {date_str} \u00b7 Total portfolio capital: ${total_capital:,.0f} "
+        f"\u00b7 Macro regime overlay: {regime}", body,
+    ))
+    story.append(Spacer(1, 10))
+
+    # Executive summary
+    n = len(scored)
+    euphoria = int(scored["Euphoria Veto"].sum())
+    traps = int(scored["Liquidity Trap"].sum())
+    q1a = int((scored["Quadrant"] == "Q1A: Institutional Sweet Spot").sum())
+    q1 = int((scored["Quadrant"] == "Q1: Macro Anchor").sum())
+    q2 = int((scored["Quadrant"] == "Q2: Tripwire Watchlist").sum())
+    q3 = int((scored["Quadrant"] == "Q3: Rented Momentum").sum())
+    q4 = int((scored["Quadrant"] == "Q4: Broken").sum())
+    total_alloc = scored["Computed Allocation ($)"].sum()
+
+    story.append(Paragraph("Executive Summary", h2))
+    story.append(Paragraph(
+        f"{n} assets scored across both engines this cycle. Q1A Institutional Sweet Spot: {q1a}, "
+        f"Q1 Macro Anchor: {q1}, Q2 Tripwire Watchlist: {q2}, Q3 Rented Momentum: {q3}, "
+        f"Q4 Broken: {q4}. {euphoria} euphoria-veto flags and {traps} liquidity-trap flags were "
+        f"triggered; scores for those names were discounted (\u00d70.60 and \u00d70.70 respectively) "
+        f"and new deployment was zeroed out. Total suggested new deployment across "
+        f"non-vetoed names: ${total_alloc:,.0f}.", body,
+    ))
+
+    # Top buys
+    story.append(Paragraph("Top Buys (highest Simon Score, not vetoed)", h2))
+    top_buys = scored[~(scored["Euphoria Veto"] | scored["Liquidity Trap"])].sort_values(
+        "Simon Score", ascending=False
+    ).head(10)
+    cols = [TECH_KEY, "Simon Score", "Momentum Score", "Valuation Score", "Quadrant", "Computed Allocation ($)"]
+    story.append(_table_from_df(top_buys, cols))
+
+    # Sub-score breakdown for Q1A / Q1 names
+    story.append(Paragraph("Sub-Score Breakdown \u2014 Macro Anchors (Q1A + Q1)", h2))
+    anchors = scored[scored["Quadrant"].isin(
+        ["Q1A: Institutional Sweet Spot", "Q1: Macro Anchor"]
+    )].sort_values("Simon Score", ascending=False)
+    anchor_cols = [TECH_KEY, "Quadrant", "Momentum Score", "Quality Composite",
+                   "Valuation Score", "Crisis Resilience Score", "Simon Score"]
+    if anchors.empty:
+        story.append(Paragraph("No names currently qualify.", body))
+    else:
+        story.append(_table_from_df(anchors, anchor_cols))
+
+    # Tripwires
+    story.append(Paragraph("New Tripwires vs. Last Month", h2))
+    if tripwires is None or tripwires.empty:
+        story.append(Paragraph("No previous-month file supplied, or no threshold crossings detected.", body))
+    else:
+        story.append(_table_from_df(tripwires, ["Ticker", "Signal", "Prev", "Now", "Direction", "Confirmed"]))
+
+    # Euphoria & liquidity trap risks
+    story.append(Paragraph("New Euphoria Risks", h2))
+    eup = scored[scored["Euphoria Veto"]][[TECH_KEY, "Health Score", "Valuation Status", "Expectations Burden"]]
+    if eup.empty:
+        story.append(Paragraph("None flagged this cycle.", body))
+    else:
+        story.append(_table_from_df(eup, list(eup.columns)))
+
+    story.append(Paragraph("Liquidity Traps", h2))
+    traps_df = scored[scored["Liquidity Trap"]][[TECH_KEY, "Health Score", "Conviction Score", "Quality Score"]]
+    if traps_df.empty:
+        story.append(Paragraph("None flagged this cycle.", body))
+    else:
+        story.append(_table_from_df(traps_df, list(traps_df.columns)))
+
+    # Portfolio rebalancing
+    story.append(PageBreak())
+    story.append(Paragraph("Portfolio Changes \u2014 Rebalancing Recommendations", h2))
+    if rebalance_df is None or rebalance_df.empty:
+        story.append(Paragraph("No current-portfolio file supplied this cycle.", body))
+    else:
+        held = rebalance_df[rebalance_df.get("Held", False) == True]  # noqa: E712
+        rebal_cols = [TECH_KEY, "Current Weight (%)", "Target Weight (%)", "Quadrant", "Recommendation"]
+        if held.empty:
+            story.append(Paragraph("No holdings matched this month's dual-engine universe.", body))
+        else:
+            story.append(_table_from_df(held.sort_values("Current Weight (%)", ascending=False), rebal_cols))
+
+    # Suggested allocation table
+    story.append(PageBreak())
+    story.append(Paragraph("Suggested Allocation \u2014 Full Book", h2))
+    alloc_cols = [TECH_KEY, "Quadrant", "Simon Score", "Technical Multiplier",
+                  "Conviction Multiplier", "Regime Adjustment", "Computed Allocation ($)"]
+    story.append(_table_from_df(
+        scored.sort_values("Computed Allocation ($)", ascending=False), alloc_cols
+    ))
+
+    doc.build(story)
+    return buf.getvalue()
