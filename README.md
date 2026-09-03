@@ -88,16 +88,29 @@ streamlit run app.py
   - **×0.60** if Euphoria Veto is triggered
   - **×0.70** if Liquidity Trap is triggered
   - **+ Regime Adjustment** from the macro overlay (see below), clipped to 0–100
-- **Quadrants** (checked in this order):
-  - **Q1A: Institutional Sweet Spot** — Conviction > 65, Health > 60, no
-    valuation halt, no euphoria veto, Expectations Burden < 15
-  - **Q1: Macro Anchor** — same as Q1A but Expectations Burden ≥ 15
-  - **Q2: Tripwire Watchlist** — Conviction > 70, Health < 40
-  - **Q3: Rented Momentum** — Health > 60 AND (valuation halted OR
-    euphoria veto) — a halt/euphoria flag now excludes a name from Q1/Q1A
-    even if Health looks strong, so fundamentals veto technicals rather
-    than being cosmetic labels next to an unchanged score
-  - **Q4: Broken** — Health < 30, Conviction < 55
+- **Quadrants**: every asset is placed on a 3x3 grid — Technical status
+  (Green: Health ≥ 60, Neutral: 40–60, Red: < 40) crossed with
+  Fundamental status (Green: Conviction ≥ 65, Neutral: 50–65, Red: < 50)
+  — so nothing falls through into an undefined middle zone the way the
+  original four-quadrant spec did:
+  - **Q1A: Institutional Sweet Spot** — Tech Green, Fund Green, no
+    halt/euphoria, Expectations Burden < 15
+  - **Q1: Macro Anchor** — same as Q1A but Burden ≥ 15
+  - **Q1B: Momentum Building** — Tech Green, Fund Neutral, confirmed
+    (technicals already strong, fundamentals catching up)
+  - **Q1C: Building Conviction** — Tech Neutral, Fund Green
+    (fundamentals strong, technicals catching up)
+  - **Q2: Tripwire Watchlist** — Tech Red, Fund Green
+  - **Q3: Rented Momentum** — Tech Green AND (Fund Red OR a valuation
+    halt/euphoria flag) — a halt/euphoria flag excludes a name from
+    Q1/Q1A/Q1B even if Health looks strong, so fundamentals veto
+    technicals rather than being a cosmetic label next to an unchanged score
+  - **Watch: Neutral Zone** — Tech Neutral, Fund Neutral
+  - **Q4B: Fundamentals Fading** — Tech Neutral, Fund Red
+  - **Q4C: Technical Breakdown** — Tech Red, Fund Neutral
+  - **Q4: Broken** — Tech Red, Fund Red
+  - **Unclassified (missing data)** — only when Health or Conviction is
+    genuinely missing from the source CSV
 - **Euphoria veto**: Health > 70 AND (Valuation Status contains "Halt"
   OR Expectations Burden > 15) → new deployment forced to $0, score ×0.60.
 - **Liquidity trap veto**: Conviction > 70 AND Quality > 80 AND Health
