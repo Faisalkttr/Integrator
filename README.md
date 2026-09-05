@@ -142,6 +142,27 @@ streamlit run app.py
   - **Buy More** — current weight < 0.75× target weight and not vetoed
   - **Hold** — otherwise
   - **New Buy** — not currently held, in Q1/Q1A, and has a nonzero target allocation
+- **Quadrant-gated sizing** (sidebar toggle, on by default): the raw
+  sizing formula only zeroes out Health < 40 names, so without this
+  gate, **Watch: Neutral Zone** and **Q4B: Fundamentals Fading** names
+  (Health is moderate, not low) can still receive full-size dollar
+  allocations despite having no confirmed edge. The gate keeps 100% of
+  the raw formula for Q1A/Q1/Q1B/Q1C, cuts Q2/Q3 to 35%, and zeroes
+  Watch/Q4B/Q4C/Q4. Both the pre-gate and post-gate dollar figures are
+  shown side by side in the quadrant tables so you can see exactly what
+  got cut and why. Turn it off to see the original ungated formula.
+  Adjust the percentages in `quadrant_engine.QUADRANT_SIZING_GATE`.
+- **Duplicate ticker detection**: if the same ticker appears more than
+  once in either uploaded CSV (e.g. two exchange listings sharing a
+  symbol, or a stale exporter row), the app warns you by name and keeps
+  only the first occurrence so the merge doesn't silently double-count
+  that name's allocation. Check your exporter if this fires.
+- **Capital utilization check**: the dashboard shows total suggested
+  new deployment as a % of your stated capital, with a warning if the
+  book still adds up to more than 100% — each name is sized
+  independently from its own structural weight, so this can happen
+  even with the sizing gate on. Treat the ranking as a priority order
+  for a limited contribution, not a set of amounts to deploy all at once.
 
 ## Notes on your specific files
 
