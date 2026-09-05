@@ -42,6 +42,29 @@ QUADRANT_COLORS = {
     "Unclassified (missing data)": "#e5e5e5",
 }
 
+# How much of the raw position-sizing formula each quadrant is allowed to
+# keep, for NEW deployment. The formula (capital x structural weight x
+# conviction x technical multiplier) already zeroes out Q2/Q4C/Q4 via the
+# technical multiplier (Health < 40 -> multiplier 0), but it does NOT
+# discount Q3 (Health is green there) or the Neutral-status quadrants -
+# so without this gate, "Watch: Neutral Zone" and "Q4B: Fundamentals
+# Fading" names were receiving full-size dollar allocations despite
+# having no confirmed edge. This gate applies on top of the euphoria/
+# liquidity-trap veto, which still forces $0 regardless of quadrant.
+QUADRANT_SIZING_GATE = {
+    "Q1A: Institutional Sweet Spot": 1.00,
+    "Q1: Macro Anchor": 1.00,
+    "Q1B: Momentum Building": 1.00,
+    "Q1C: Building Conviction": 1.00,
+    "Q2: Tripwire Watchlist": 0.35,
+    "Q3: Rented Momentum": 0.35,
+    "Watch: Neutral Zone": 0.00,
+    "Q4B: Fundamentals Fading": 0.00,
+    "Q4C: Technical Breakdown": 0.00,
+    "Q4: Broken": 0.00,
+    "Unclassified (missing data)": 0.00,
+}
+
 
 def _tech_status(health) -> str:
     if pd.isna(health):
