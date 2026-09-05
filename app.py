@@ -85,6 +85,19 @@ def parse_money(series: pd.Series) -> pd.Series:
     return pd.to_numeric(cleaned, errors="coerce")
 
 
+def _warn_and_drop_duplicates(df: pd.DataFrame, key: str, label: str) -> pd.DataFrame:
+    dupes = df[df.duplicated(subset=[key], keep=False)][key].unique().tolist()
+    if dupes:
+        st.warning(
+            f"\u26a0\ufe0f {label} CSV has duplicate {key} value(s): {dupes}. "
+            "Keeping the first occurrence of each and dropping the rest so "
+            "downstream numbers aren't double-counted \u2014 check your exporter "
+            "for why the same ticker appears more than once."
+        )
+        df = df.drop_duplicates(subset=[key], keep="first")
+    return df
+
+
 def load_fundamental(file) -> pd.DataFrame:
     df = pd.read_csv(file)
     df.columns = [c.strip() for c in df.columns]
@@ -97,6 +110,7 @@ def load_fundamental(file) -> pd.DataFrame:
         if col in df.columns:
             df[col] = parse_money(df[col].astype(str).str.replace("x", "", regex=False))
     df["Ticker"] = df["Ticker"].astype(str).str.strip()
+    df = _warn_and_drop_duplicates(df, "Ticker", "Fundamental")
     return df
 
 
@@ -118,13 +132,16 @@ def load_technical(file) -> pd.DataFrame:
         if col in df.columns:
             df[col] = parse_money(df[col])
     df["Asset"] = df["Asset"].astype(str).str.strip()
+    df = _warn_and_drop_duplicates(df, "Asset", "Technical")
     return df
 
 
 # --------------------------------------------------------------------------
 # Full scoring pipeline
 # --------------------------------------------------------------------------
-def score_merged(merged: pd.DataFrame, weights: dict, total_capital: float, regime: str) -> pd.DataFrame:
+def score_merged(
+    merged: pd.DataFrame, weights: dict, total_capital: float, regime: str, apply_sizing_gate: bool
+) -> pd.DataFrame:
     df = merged.copy()
 
     df = se.compute_sub_scores(df)
@@ -144,11 +161,20 @@ def score_merged(merged: pd.DataFrame, weights: dict, total_capital: float, regi
 
     df["Technical Multiplier"] = df["Health Score"].apply(se.technical_multiplier)
     df["Conviction Multiplier"] = (df["Conviction Score"].fillna(0) / 100.0).round(3)
-    df["Computed Allocation ($)"] = (
+    df["Computed Allocation (Pre-Quadrant-Gate) ($)"] = (
         total_capital
         * (df["Structural Weight (%)"].fillna(0) / 100.0)
         * df["Conviction Multiplier"]
         * df["Technical Multiplier"]
+    ).round(0)
+
+    if apply_sizing_gate:
+        df["Quadrant Sizing Gate"] = df["Quadrant"].map(qe.QUADRANT_SIZING_GATE).fillna(0.0)
+    else:
+        df["Quadrant Sizing Gate"] = 1.0
+
+    df["Computed Allocation ($)"] = (
+        df["Computed Allocation (Pre-Quadrant-Gate) ($)"] * df["Quadrant Sizing Gate"]
     ).round(0)
     df.loc[df["Euphoria Veto"] | df["Liquidity Trap"], "Computed Allocation ($)"] = 0
 
@@ -202,6 +228,23 @@ total_capital = st.sidebar.number_input(
     "Total portfolio capital ($)", min_value=0, value=250_000, step=5_000
 )
 
+st.sidebar.markdown("---")
+st.sidebar.subheader("\U0001F6AA Quadrant-gated sizing")
+apply_sizing_gate = st.sidebar.checkbox(
+    "Discount new deployment by quadrant quality", value=True,
+)
+with st.sidebar.expander("What this does"):
+    st.write(
+        "The raw formula (capital \u00d7 structural weight \u00d7 conviction \u00d7 "
+        "technical multiplier) already zeroes out Health < 40 names, but it doesn't "
+        "discount **Q3: Rented Momentum** (Health is green there) or the Neutral-status "
+        "quadrants \u2014 so without this gate, Watch/Q4B names can still receive "
+        "full-size dollar allocations despite having no confirmed edge. This gate "
+        "gives Q1A/Q1/Q1B/Q1C 100%, Q2/Q3 35%, and everything else (Watch, Q4B, Q4C, "
+        "Q4) 0% of the raw formula, for NEW money only. Euphoria/liquidity-trap vetoes "
+        "still force $0 regardless of this setting."
+    )
+
 # --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
@@ -228,7 +271,7 @@ fund_only = fundamental_df[~fundamental_df[FUND_KEY].isin(technical_df[TECH_KEY]
 tech_only = technical_df[~technical_df[TECH_KEY].isin(fundamental_df[FUND_KEY])]
 
 weights = {"momentum": w_mom, "quality": w_qual, "valuation": w_val, "crisis": w_crisis}
-scored = score_merged(merged, weights, total_capital, regime)
+scored = score_merged(merged, weights, total_capital, regime, apply_sizing_gate)
 
 # ---- Top metrics ----------------------------------------------------------
 c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -241,6 +284,20 @@ c6.metric("Technical-only", len(tech_only))
 
 if regime != "Neutral (no adjustment)":
     st.caption(f"\U0001F30D Regime overlay active: **{regime}** \u2014 scores above already include the adjustment.")
+
+total_suggested = scored["Computed Allocation ($)"].sum()
+utilization = (total_suggested / total_capital * 100) if total_capital else 0
+u1, u2 = st.columns(2)
+u1.metric("Total Suggested New Deployment", f"${total_suggested:,.0f}")
+u2.metric("Capital Utilization", f"{utilization:.0f}%", help="Suggested deployment as a % of total portfolio capital.")
+if utilization > 100:
+    st.warning(
+        f"\u26a0\ufe0f Suggested new deployment (${total_suggested:,.0f}) exceeds your stated "
+        f"capital (${total_capital:,.0f}). Each name is sized independently from your "
+        "structural weight, so the book can still add up to more than 100% even with "
+        "quadrant gating on \u2014 treat the ranking as a priority order for a limited "
+        "monthly contribution, not a set of amounts to deploy all at once."
+    )
 
 st.markdown("---")
 
@@ -291,7 +348,8 @@ display_cols = [
     TECH_KEY, "Section_tech", "Simon Score", "Momentum Score", "Quality Composite",
     "Valuation Score", "Crisis Resilience Score", "Health Score", "Conviction Score",
     "Valuation Status", "Expectations Burden", "Euphoria Veto", "Liquidity Trap",
-    "Regime Adjustment", "Technical Multiplier", "Computed Allocation ($)",
+    "Regime Adjustment", "Technical Multiplier", "Quadrant Sizing Gate",
+    "Computed Allocation (Pre-Quadrant-Gate) ($)", "Computed Allocation ($)",
 ]
 display_cols = [c for c in display_cols if c in scored.columns]
 
