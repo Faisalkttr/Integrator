@@ -78,8 +78,11 @@ def build_pdf_report(
         f"{n} assets scored across both engines this cycle. Breakdown by quadrant \u2014 "
         f"{quadrant_summary}. {euphoria} euphoria-veto flags and {traps} liquidity-trap flags "
         f"were triggered; scores for those names were discounted (\u00d70.60 and \u00d70.70 "
-        f"respectively) and new deployment was zeroed out. Total suggested new deployment "
-        f"across non-vetoed names: ${total_alloc:,.0f}.", body,
+        f"respectively) and new deployment was zeroed out. Quadrant-gated sizing (Q1A/Q1/Q1B/"
+        f"Q1C: 100%, Q2/Q3: 35%, Watch/Q4B/Q4C/Q4: 0% of the raw formula) is reflected in the "
+        f"figures below. Total suggested new deployment across non-vetoed names: "
+        f"${total_alloc:,.0f} ({total_alloc / total_capital * 100:.0f}% of stated capital "
+        f"${total_capital:,.0f}).", body,
     ))
 
     # Top buys
@@ -142,7 +145,7 @@ def build_pdf_report(
     story.append(PageBreak())
     story.append(Paragraph("Suggested Allocation \u2014 Full Book", h2))
     alloc_cols = [TECH_KEY, "Quadrant", "Simon Score", "Technical Multiplier",
-                  "Conviction Multiplier", "Regime Adjustment", "Computed Allocation ($)"]
+                  "Conviction Multiplier", "Quadrant Sizing Gate", "Computed Allocation ($)"]
     story.append(_table_from_df(
         scored.sort_values("Computed Allocation ($)", ascending=False), alloc_cols
     ))
