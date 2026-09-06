@@ -5,6 +5,18 @@ import pandas as pd
 
 
 def normalize_0_100(series: pd.Series) -> pd.Series:
+    """Min-max rescale to 0-100 across the CURRENT upload only.
+
+    Caution: this is batch-relative, not an absolute scale. The same raw
+    value for the same ticker can normalize to a different score in a
+    different month if the spread of the uploaded universe changes (more
+    or fewer tickers, a wider or narrower range that month). Anything
+    built from this function is fine for ranking names *within* a single
+    month's upload, but is not a reliable fixed yardstick for tracking a
+    single name's own progress across months (used by Momentum Score's
+    alpha/rel-mom inputs and by Crisis Resilience Score - see
+    compute_sub_scores).
+    """
     lo, hi = series.min(), series.max()
     if pd.isna(lo) or pd.isna(hi) or hi == lo:
         return pd.Series(50.0, index=series.index)
@@ -70,7 +82,17 @@ def technical_multiplier(health) -> float:
 
 
 def compute_sub_scores(df: pd.DataFrame) -> pd.DataFrame:
-    """Momentum / Quality / Valuation / Crisis Resilience, each 0-100."""
+    """Momentum / Quality / Valuation / Crisis Resilience, each 0-100.
+
+    Momentum and Crisis Resilience blend an absolute-scale metric (Health
+    Score, LT Score - fixed 0-100 meaning every month, since euphoria/
+    liquidity-trap thresholds rely on that) with batch-relative
+    normalize_0_100 outputs (63D Alpha, 12-1 Rel Mom, Crisis Alpha,
+    Drawdown Efficiency). See normalize_0_100's docstring: this means
+    Momentum/Crisis scores are reliable for ranking names within one
+    month's upload, but aren't a fixed yardstick for comparing the same
+    name's score across different months' uploads.
+    """
     df = df.copy()
 
     mom_parts = {}
@@ -84,8 +106,21 @@ def compute_sub_scores(df: pd.DataFrame) -> pd.DataFrame:
         mom_parts["relmom"] = normalize_0_100(df["12-1 Rel Mom"])
     df["Momentum Score"] = pd.DataFrame(mom_parts).mean(axis=1, skipna=True).round(1)
 
-    qual_cols = [c for c in ["Quality Score", "Conviction Score"] if c in df]
-    df["Quality Composite"] = df[qual_cols].mean(axis=1, skipna=True).round(1)
+    # Quality Composite uses raw Quality Score ONLY - not averaged with
+    # Conviction Score. Conviction Score (as computed by the Fundamental
+    # Engine upstream) is itself already a blend that includes the
+    # Valuation Multiplier (empirically: Conviction Score correlates
+    # ~0.65 with Valuation Score on real data, vs ~0.08 for raw Quality
+    # Score). Averaging it into "Quality" would quietly double-count
+    # valuation inside a leg that's supposed to sit independently next to
+    # the Valuation Score leg in compute_composite_score. Conviction
+    # Score is still used on its own elsewhere (Conviction Multiplier in
+    # position sizing, and the liquidity-trap check) - it's just no
+    # longer folded into this quality metric.
+    if "Quality Score" in df:
+        df["Quality Composite"] = df["Quality Score"].round(1)
+    else:
+        df["Quality Composite"] = np.nan
 
     base = df["Valuation Status"].apply(valuation_status_base)
     burden_penalty = df.get("Expectations Burden", pd.Series(0, index=df.index)).fillna(0).clip(upper=30)
