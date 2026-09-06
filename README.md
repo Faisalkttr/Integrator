@@ -73,15 +73,63 @@ streamlit run app.py
 
 ## How scoring works
 
-- **Four sub-scores** (0–100 each), computed from your columns:
-  - **Momentum** — average of Health Score, LT Score, normalized 63D
-    Alpha vs Benchmark, normalized 12-1 Relative Momentum
-  - **Quality Composite** — average of Quality Score and Conviction Score
+- **Four sub-scores** (0–100 each), computed from your columns. Note:
+  quadrant membership and the euphoria/liquidity-trap vetoes deliberately
+  stay on **Health Score (63-day)** throughout this app — that's an
+  explicit choice (see "Technical Score Basis" below), not an oversight.
+  Momentum and Crisis Resilience below are display/ranking metrics only
+  (nothing vetoes or classifies off them), so they're built to honestly
+  reflect a long horizon instead:
+  - **Momentum** — weighted blend of LT Score (45%), 12-1 Rel Mom (30%),
+    252D Slope (15%) — all genuinely 252-day/skip-month signals — plus
+    a small 63D Alpha weight (10%) as a "is the market starting to
+    confirm right now" tiebreaker. Health Score is deliberately excluded
+    here since it already drives quadrants/vetoes separately.
+  - **Quality Composite** — raw Quality Score from your Fundamental
+    Engine. This is deliberately *not* averaged with Conviction Score:
+    on real data, Conviction Score correlates ~0.65 with Valuation Score
+    (it already bakes in the Valuation Multiplier upstream), while raw
+    Quality Score correlates only ~0.08. Averaging them in would quietly
+    double-count valuation inside the leg that's supposed to sit
+    independently next to Valuation Score below. Conviction Score is
+    still used elsewhere (Conviction Multiplier in position sizing, and
+    the liquidity-trap check) - just not folded into this metric.
   - **Valuation** — a base score from Valuation Status (Value Zone=100
     down to Tactical Valuation Halt=10) minus Expectations Burden
     (capped at 30 points of penalty)
-  - **Crisis Resilience** — average of normalized Crisis Alpha, Crisis
-    Alpha (LT), and Drawdown Efficiency
+  - **Crisis Resilience** — weighted blend of Crisis Alpha (LT) (45%),
+    inverted Down Capture (LT) (30%), Up Capture (LT) (10%), and
+    full-period Max Drawdown (15%) — all 252-day-window metrics. The
+    63-day Crisis Alpha and Drawdown Efficiency are deliberately excluded:
+    per the Technical Engine's own source, Drawdown Efficiency divides a
+    63-day alpha by a 63-day drawdown, so both are quarterly signals
+    that don't belong in a score meant to describe year-long resilience.
+
+  \u26a0\ufe0f **Batch-relative normalization caveat**: every `normalize_0_100`
+  call above (Alpha, Rel-Mom, 252D Slope, Crisis Alpha (LT), capture
+  ratios, Max Drawdown) is min-max rescaled to the *current upload's*
+  range (see `normalize_0_100`'s docstring in `scoring_engine.py`). LT
+  Score and Health Score are absolute-scale and mean the same thing
+  every month; the normalized inputs don't. This is fine for ranking
+  names within a single month's file, but means the same ticker's
+  Momentum/Crisis Resilience score isn't a fixed yardstick across
+  different months if the uploaded universe's spread changes.
+
+- **Technical Score Basis**: quadrant membership (Technical Green/
+  Neutral/Red bands) and both vetoes use **Health Score**, which is your
+  Technical Engine's 63-day trading-window score, NOT its 252-day LT
+  Score - these are genuinely different numbers computed in the same
+  engine (`app__plotv2_.py`'s `generate_automated_scoring`, mode=
+  "trading" vs mode="longterm"; on real data Health Score and LT Score
+  correlate only ~0.12). This means quadrants and vetoes react to
+  quarterly price action, not year-long trend - a deliberate choice, not
+  a bug: it keeps the euphoria/liquidity-trap vetoes fast-reacting to
+  acute risk, at the cost of possibly classifying a name like VRSN
+  (Health 2.6, LT Score 91.7) as Technical Red / $0 allocation during a
+  rough quarter despite a strong 12-month trend. If you'd rather
+  quadrants/vetoes react to the 252-day LT Score instead, that's a
+  `quadrant_engine.py` / `scoring_engine.py` change - ask for it
+  explicitly, since it changes which names qualify for new capital.
 - **Simon Score** = weighted blend of the four sub-scores (defaults:
   35% Momentum / 25% Quality / 25% Valuation / 15% Crisis — adjustable
   in the sidebar), then:
