@@ -85,41 +85,42 @@ def parse_money(series: pd.Series) -> pd.Series:
     return pd.to_numeric(cleaned, errors="coerce")
 
 
-def _warn_and_drop_duplicates(df: pd.DataFrame, key: str, label: str) -> pd.DataFrame:
+def _warn_and_drop_duplicates(df: pd.DataFrame, key: str, label: str, notes: list) -> pd.DataFrame:
     dupes = df[df.duplicated(subset=[key], keep=False)][key].unique().tolist()
     if dupes:
-        st.warning(
-            f"\u26a0\ufe0f {label} CSV has duplicate {key} value(s): {dupes}. "
-            "Keeping the first occurrence of each and dropping the rest so "
-            "downstream numbers aren't double-counted \u2014 check your exporter "
-            "for why the same ticker appears more than once."
+        notes.append(
+            ("warning",
+             f"**{label} CSV** had duplicate {key} value(s): {', '.join(map(str, dupes))}. "
+             "I kept the first occurrence of each and dropped the rest so downstream "
+             "numbers aren't double-counted \u2014 worth checking your exporter for why "
+             "the same ticker showed up twice.")
         )
         df = df.drop_duplicates(subset=[key], keep="first")
     return df
 
 
-def load_fundamental(file) -> pd.DataFrame:
+def load_fundamental(file, notes: list) -> pd.DataFrame:
     df = pd.read_csv(file)
     df.columns = [c.strip() for c in df.columns]
     missing = [c for c in FUND_REQUIRED if c not in df.columns]
     if missing:
-        st.warning(f"Fundamental CSV is missing expected columns: {missing}")
+        notes.append(("warning", f"**Fundamental CSV** is missing expected column(s): {missing}."))
     df["Structural Weight (%)"] = parse_percent(df["Structural Weight"])
     df["Suggested $ Deployment"] = parse_money(df["Suggested $ Deployment"])
     for col in ["Valuation Multiplier", "Expectations Burden", "Quality Score", "Conviction Score"]:
         if col in df.columns:
             df[col] = parse_money(df[col].astype(str).str.replace("x", "", regex=False))
     df["Ticker"] = df["Ticker"].astype(str).str.strip()
-    df = _warn_and_drop_duplicates(df, "Ticker", "Fundamental")
+    df = _warn_and_drop_duplicates(df, "Ticker", "Fundamental", notes)
     return df
 
 
-def load_technical(file) -> pd.DataFrame:
+def load_technical(file, notes: list) -> pd.DataFrame:
     df = pd.read_csv(file)
     df.columns = [c.strip() for c in df.columns]
     missing = [c for c in TECH_REQUIRED if c not in df.columns]
     if missing:
-        st.warning(f"Technical CSV is missing expected columns: {missing}")
+        notes.append(("warning", f"**Technical CSV** is missing expected column(s): {missing}."))
     numeric_candidates = [
         "Health Score", "LT Score", "Sector Percentile", "1M Return", "3M Return",
         "63D Alpha vs BM", "Vol-Adjusted RS", "Trend R\u00b2", "RS Acceleration",
@@ -132,7 +133,7 @@ def load_technical(file) -> pd.DataFrame:
         if col in df.columns:
             df[col] = parse_money(df[col])
     df["Asset"] = df["Asset"].astype(str).str.strip()
-    df = _warn_and_drop_duplicates(df, "Asset", "Technical")
+    df = _warn_and_drop_duplicates(df, "Asset", "Technical", notes)
     return df
 
 
@@ -211,16 +212,33 @@ st.sidebar.caption(
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("\u2696\ufe0f Simon Score weights")
-w_mom = st.sidebar.slider("Momentum weight", 0.0, 1.0, 0.35, 0.05)
-w_qual = st.sidebar.slider("Quality weight", 0.0, 1.0, 0.25, 0.05)
-w_val = st.sidebar.slider("Valuation weight", 0.0, 1.0, 0.25, 0.05)
-w_crisis = st.sidebar.slider("Crisis Resilience weight", 0.0, 1.0, 0.15, 0.05)
+
+WEIGHT_PRESETS = {
+    "Conservative": {"mom": 0.20, "qual": 0.35, "val": 0.30, "crisis": 0.15},
+    "Balanced": {"mom": 0.35, "qual": 0.25, "val": 0.25, "crisis": 0.15},
+    "Aggressive": {"mom": 0.50, "qual": 0.15, "val": 0.20, "crisis": 0.15},
+}
+for slot, val in WEIGHT_PRESETS["Balanced"].items():
+    st.session_state.setdefault(f"w_{slot}", val)
+
+st.sidebar.caption("Start from a preset, then fine-tune below.")
+preset_cols = st.sidebar.columns(3)
+for col, (label, defaults) in zip(preset_cols, WEIGHT_PRESETS.items()):
+    if col.button(label, use_container_width=True):
+        for slot, val in defaults.items():
+            st.session_state[f"w_{slot}"] = val
+        st.rerun()
+
+w_mom = st.sidebar.slider("Momentum weight", 0.0, 1.0, step=0.05, key="w_mom")
+w_qual = st.sidebar.slider("Quality weight", 0.0, 1.0, step=0.05, key="w_qual")
+w_val = st.sidebar.slider("Valuation weight", 0.0, 1.0, step=0.05, key="w_val")
+w_crisis = st.sidebar.slider("Crisis Resilience weight", 0.0, 1.0, step=0.05, key="w_crisis")
 weight_sum = w_mom + w_qual + w_val + w_crisis
 if abs(weight_sum - 1.0) > 0.001:
-    st.sidebar.caption(f"\u26a0\ufe0f Weights sum to {weight_sum:.2f}, not 1.00 (score still computes).")
+    st.sidebar.caption(f"\u2696\ufe0f Weights sum to {weight_sum:.2f}, not 1.00 \u2014 the score still computes fine, just isn't a clean blend.")
 st.sidebar.caption(
     "Euphoria-veto names are scored \u00d70.60, liquidity-trap names \u00d70.70, "
-    "on top of these weights."
+    "on top of whatever you dial in above."
 )
 
 st.sidebar.markdown("---")
@@ -256,10 +274,26 @@ st.caption(
 
 if not technical_file or not fundamental_file:
     st.info("Upload both the **Technical** and **Fundamental** CSVs in the sidebar to run the engine.")
+    st.markdown("#### How this works")
+    walk_cols = st.columns(3)
+    with walk_cols[0]:
+        st.markdown("**1. You upload two exports**")
+        st.caption("Technical Engine CSV + Fundamental Engine CSV, matched by ticker.")
+    with walk_cols[1]:
+        st.markdown("**2. I blend & score**")
+        st.caption("Momentum, Quality, Valuation, and Crisis Resilience roll into one penalty-adjusted Simon Score.")
+    with walk_cols[2]:
+        st.markdown("**3. You get a call to act on**")
+        st.caption("Quadrant, sizing, vetoes, tripwires vs. last month, and rebalance suggestions \u2014 ready to export.")
+    st.caption(
+        "Optional add-ons in the sidebar \u2014 last month's scored export and your current "
+        "holdings \u2014 unlock tripwire detection and Buy/Hold/Trim/Exit calls."
+    )
     st.stop()
 
-technical_df = load_technical(technical_file)
-fundamental_df = load_fundamental(fundamental_file)
+run_notes = []
+technical_df = load_technical(technical_file, run_notes)
+fundamental_df = load_fundamental(fundamental_file, run_notes)
 
 merged = pd.merge(
     technical_df, fundamental_df,
@@ -273,6 +307,12 @@ tech_only = technical_df[~technical_df[TECH_KEY].isin(fundamental_df[FUND_KEY])]
 weights = {"momentum": w_mom, "quality": w_qual, "valuation": w_val, "crisis": w_crisis}
 scored = score_merged(merged, weights, total_capital, regime, apply_sizing_gate)
 
+# ---- Session notes ---------------------------------------------------------
+if run_notes:
+    with st.expander(f"\U0001F4DD What I noticed this run ({len(run_notes)})", expanded=False):
+        for kind, msg in run_notes:
+            (st.warning if kind == "warning" else st.info)(msg)
+
 # ---- Top metrics ----------------------------------------------------------
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Dual-Engine Assets", len(scored))
@@ -285,6 +325,16 @@ c6.metric("Technical-only", len(tech_only))
 if regime != "Neutral (no adjustment)":
     st.caption(f"\U0001F30D Regime overlay active: **{regime}** \u2014 scores above already include the adjustment.")
 
+n_eup = int(scored["Euphoria Veto"].sum())
+n_lt = int(scored["Liquidity Trap"].sum())
+if n_eup or n_lt:
+    bits = []
+    if n_eup:
+        bits.append(f"{n_eup} name(s) hit an Euphoria Veto (scored \u00d70.60)")
+    if n_lt:
+        bits.append(f"{n_lt} name(s) hit a Liquidity Trap (scored \u00d70.70)")
+    st.caption("\u26a1 " + " and ".join(bits) + " \u2014 see the Quadrant breakdown below for which ones.")
+
 total_suggested = scored["Computed Allocation ($)"].sum()
 utilization = (total_suggested / total_capital * 100) if total_capital else 0
 u1, u2 = st.columns(2)
@@ -292,21 +342,51 @@ u1.metric("Total Suggested New Deployment", f"${total_suggested:,.0f}")
 u2.metric("Capital Utilization", f"{utilization:.0f}%", help="Suggested deployment as a % of total portfolio capital.")
 if utilization > 100:
     st.warning(
-        f"\u26a0\ufe0f Suggested new deployment (${total_suggested:,.0f}) exceeds your stated "
-        f"capital (${total_capital:,.0f}). Each name is sized independently from your "
-        "structural weight, so the book can still add up to more than 100% even with "
-        "quadrant gating on \u2014 treat the ranking as a priority order for a limited "
-        "monthly contribution, not a set of amounts to deploy all at once."
+        f"\u26a0\ufe0f Suggested new deployment (${total_suggested:,.0f}) is above your stated "
+        f"capital (${total_capital:,.0f}) \u2014 and that's expected, not a bug. Each name is sized "
+        "independently from its own structural weight, so the book can add up to more than "
+        "100% even with quadrant gating on. Read the ranking as a priority order for a "
+        "limited monthly contribution, not a shopping list to fill all at once."
     )
 
 st.markdown("---")
 
 # ---- Tripwires --------------------------------------------------------
+st.subheader("\U0001F6A8 What changed since last month")
 if prev_scored_file is not None:
     try:
         prev_scored = pd.read_csv(prev_scored_file)
+
+        # Plain-language recap comparing this run to the prior upload, before the raw table.
+        story_bits = []
+        if "Quadrant" in prev_scored.columns:
+            prev_q1a = int((prev_scored["Quadrant"] == "Q1A: Institutional Sweet Spot").sum())
+            cur_q1a = int((scored["Quadrant"] == "Q1A: Institutional Sweet Spot").sum())
+            delta = cur_q1a - prev_q1a
+            if delta > 0:
+                story_bits.append(f"**{delta} more** name(s) moved into Q1A: Institutional Sweet Spot ({prev_q1a} \u2192 {cur_q1a}).")
+            elif delta < 0:
+                story_bits.append(f"**{-delta} fewer** name(s) are in Q1A: Institutional Sweet Spot now ({prev_q1a} \u2192 {cur_q1a}).")
+        if "Euphoria Veto" in prev_scored.columns:
+            prev_eup = int(pd.Series(prev_scored["Euphoria Veto"]).astype(str).str.lower().eq("true").sum())
+            cur_eup = int(scored["Euphoria Veto"].sum())
+            if cur_eup != prev_eup:
+                story_bits.append(f"Euphoria vetoes went from {prev_eup} to {cur_eup}.")
+        if "Liquidity Trap" in prev_scored.columns:
+            prev_lt = int(pd.Series(prev_scored["Liquidity Trap"]).astype(str).str.lower().eq("true").sum())
+            cur_lt = int(scored["Liquidity Trap"].sum())
+            if cur_lt != prev_lt:
+                story_bits.append(f"Liquidity traps went from {prev_lt} to {cur_lt}.")
+
         tripwires = tw.detect_tripwires(scored, prev_scored)
-        st.subheader("\U0001F6A8 Tripwires this month")
+        if not tripwires.empty:
+            story_bits.append(f"{len(tripwires)} threshold crossing(s) fired this month \u2014 see the table below.")
+
+        if story_bits:
+            st.markdown(" ".join(story_bits))
+        else:
+            st.caption("Nothing material shifted versus last month's upload.")
+
         if tripwires.empty:
             st.write("No threshold crossings detected vs. previous upload.")
         else:
@@ -316,10 +396,11 @@ if prev_scored_file is not None:
                 "Benchmark is positive and the current Regime isn't Bear."
             )
     except Exception as e:
+        tripwires = pd.DataFrame()
         st.warning(f"Could not compare to previous export: {e}")
 else:
     tripwires = pd.DataFrame()
-    st.caption("Upload last month's scored export in the sidebar to enable tripwire detection.")
+    st.caption("Upload last month's scored export in the sidebar to enable tripwire detection and a month-over-month recap.")
 
 st.markdown("---")
 
@@ -434,3 +515,19 @@ with col_b:
         file_name=f"committee_report_{today}.pdf",
         mime="application/pdf",
     )
+
+# ---- Run recap --------------------------------------------------------
+st.markdown("---")
+top_names = scored.sort_values("Simon Score", ascending=False).head(3)
+recap_lines = [f"**This run, in brief:**"]
+if not top_names.empty:
+    top_str = ", ".join(
+        f"{row[TECH_KEY]} ({row['Simon Score']:.0f})" for _, row in top_names.iterrows()
+    )
+    recap_lines.append(f"- Top-ranked: {top_str}")
+recap_lines.append(f"- Suggested new deployment: ${total_suggested:,.0f} ({utilization:.0f}% of capital)")
+if not tripwires.empty:
+    recap_lines.append(f"- {len(tripwires)} tripwire(s) fired since last month")
+if n_eup or n_lt:
+    recap_lines.append(f"- {n_eup} Euphoria Veto(s), {n_lt} Liquidity Trap(s) held back from full sizing")
+st.caption("\n".join(recap_lines))
