@@ -189,6 +189,25 @@ st.sidebar.title("\U0001F4C1 Monthly Upload")
 technical_file = st.sidebar.file_uploader("Technical Engine CSV", type=["csv"], key="tech")
 fundamental_file = st.sidebar.file_uploader("Fundamental Engine CSV", type=["csv"], key="fund")
 
+files_ready = technical_file is not None and fundamental_file is not None
+current_sig = (
+    (technical_file.name, technical_file.size, fundamental_file.name, fundamental_file.size)
+    if files_ready else None
+)
+
+process_clicked = st.sidebar.button(
+    "\u2699\ufe0f Process files",
+    type="primary",
+    disabled=not files_ready,
+    use_container_width=True,
+)
+if not files_ready:
+    st.sidebar.caption("Upload both files above to enable processing.")
+elif st.session_state.get("data_ready") and st.session_state.get("processed_sig") == current_sig:
+    st.sidebar.caption("\u2705 Processed \u2014 tweak weights/regime freely below, or re-upload new files and process again.")
+else:
+    st.sidebar.caption("Files loaded. Click **Process files** to parse, merge, and score them.")
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("\u23F1\ufe0f Tripwire comparison (optional)")
 prev_scored_file = st.sidebar.file_uploader(
@@ -291,18 +310,45 @@ if not technical_file or not fundamental_file:
     )
     st.stop()
 
-run_notes = []
-technical_df = load_technical(technical_file, run_notes)
-fundamental_df = load_fundamental(fundamental_file, run_notes)
+# Process (parse + merge) only runs when the button is clicked, or was already
+# run for these exact files earlier in the session.
+if process_clicked:
+    with st.spinner("Parsing and merging the two exports\u2026"):
+        _run_notes = []
+        _technical_df = load_technical(technical_file, _run_notes)
+        _fundamental_df = load_fundamental(fundamental_file, _run_notes)
+        _merged = pd.merge(
+            _technical_df, _fundamental_df,
+            left_on=TECH_KEY, right_on=FUND_KEY,
+            how="inner", suffixes=("_tech", "_fund"),
+        )
+        st.session_state.update(dict(
+            technical_df=_technical_df,
+            fundamental_df=_fundamental_df,
+            merged=_merged,
+            fund_only=_fundamental_df[~_fundamental_df[FUND_KEY].isin(_technical_df[TECH_KEY])],
+            tech_only=_technical_df[~_technical_df[TECH_KEY].isin(_fundamental_df[FUND_KEY])],
+            run_notes=_run_notes,
+            processed_sig=current_sig,
+            data_ready=True,
+        ))
+    st.toast("Files processed \u2014 dashboard is up to date.", icon="\u2705")
 
-merged = pd.merge(
-    technical_df, fundamental_df,
-    left_on=TECH_KEY, right_on=FUND_KEY,
-    how="inner", suffixes=("_tech", "_fund"),
-)
+# Files changed since the last successful process -> treat cached data as stale.
+if st.session_state.get("processed_sig") != current_sig:
+    st.session_state.data_ready = False
 
-fund_only = fundamental_df[~fundamental_df[FUND_KEY].isin(technical_df[TECH_KEY])]
-tech_only = technical_df[~technical_df[TECH_KEY].isin(fundamental_df[FUND_KEY])]
+if not st.session_state.get("data_ready"):
+    st.info(
+        "Technical and Fundamental files are loaded. Click **\u2699\ufe0f Process files** in the "
+        "sidebar to parse, merge, and score them."
+    )
+    st.stop()
+
+merged = st.session_state.merged
+fund_only = st.session_state.fund_only
+tech_only = st.session_state.tech_only
+run_notes = st.session_state.run_notes
 
 weights = {"momentum": w_mom, "quality": w_qual, "valuation": w_val, "crisis": w_crisis}
 scored = score_merged(merged, weights, total_capital, regime, apply_sizing_gate)
