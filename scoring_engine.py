@@ -4,6 +4,40 @@ import numpy as np
 import pandas as pd
 
 
+def compute_structural_health(
+    df: pd.DataFrame, lt_weight: float = 0.70, health_weight: float = 0.30
+) -> pd.Series:
+    """Structural Health = lt_weight*LT Score + health_weight*Health Score.
+
+    This exists for ONE purpose: feeding quadrant classification
+    (quadrant_engine.classify_quadrant) with a horizon-appropriate signal
+    for a 15-year thesis, instead of the 63-day Health Score alone. It does
+    NOT replace Health Score anywhere else - euphoria_veto, liquidity_trap_veto,
+    technical_multiplier (position-sizing throttle), and the tripwire detector
+    all deliberately keep reading raw Health Score, because those exist to
+    catch acute, quarter-scale risk regardless of the long-term trend. Do not
+    redirect them to this function.
+
+    Renormalizes when one side is missing (mirrors the missing-data policy in
+    compute_sub_scores' _weighted_mean) so a single missing input drags the
+    score toward whichever input IS present, not toward zero.
+    """
+    if "LT Score" not in df.columns and "Health Score" not in df.columns:
+        return pd.Series(np.nan, index=df.index)
+    if "LT Score" not in df.columns:
+        return df["Health Score"].astype(float)
+    if "Health Score" not in df.columns:
+        return df["LT Score"].astype(float)
+
+    lt, health = df["LT Score"], df["Health Score"]
+    lt_present, health_present = lt.notna(), health.notna()
+    w_lt = lt_weight * lt_present
+    w_health = health_weight * health_present
+    weight_total = (w_lt + w_health).replace(0, np.nan)
+    weighted_sum = lt.fillna(0) * w_lt + health.fillna(0) * w_health
+    return (weighted_sum / weight_total).round(1)
+
+
 def normalize_0_100(series: pd.Series) -> pd.Series:
     """Min-max rescale to 0-100 across the CURRENT upload only.
 
