@@ -403,6 +403,19 @@ if prev_scored_file is not None:
     try:
         prev_scored = pd.read_csv(prev_scored_file)
 
+        # Quadrant Momentum (Phase 1: informational only, does not affect
+        # Computed Allocation $). Reuses the same prev_scored upload the
+        # tripwire detector already relies on - no new file, no new state.
+        if "Quadrant" in prev_scored.columns and TECH_KEY in prev_scored.columns:
+            prev_quad_map = prev_scored.set_index(TECH_KEY)["Quadrant"]
+            scored["Prev Quadrant"] = scored[TECH_KEY].map(prev_quad_map)
+            scored["Quadrant Momentum"] = scored.apply(
+                lambda r: qe.quadrant_momentum(r["Prev Quadrant"], r["Quadrant"]), axis=1
+            )
+            scored["Quadrant Momentum Label"] = scored["Quadrant Momentum"].map(
+                qe.QUADRANT_MOMENTUM_LABELS
+            )
+
         # Plain-language recap comparing this run to the prior upload, before the raw table.
         story_bits = []
         if "Quadrant" in prev_scored.columns:
@@ -423,6 +436,15 @@ if prev_scored_file is not None:
             cur_lt = int(scored["Liquidity Trap"].sum())
             if cur_lt != prev_lt:
                 story_bits.append(f"Liquidity traps went from {prev_lt} to {cur_lt}.")
+
+        if "Quadrant Momentum" in scored.columns:
+            n_up = int(scored["Quadrant Momentum"].fillna(0).gt(0).sum())
+            n_down = int(scored["Quadrant Momentum"].fillna(0).lt(0).sum())
+            if n_up or n_down:
+                story_bits.append(
+                    f"Quadrant Momentum: {n_up} name(s) upgraded, {n_down} downgraded "
+                    "since last month\u2014see the Quadrant breakdown below."
+                )
 
         tripwires = tw.detect_tripwires(scored, prev_scored)
         if not tripwires.empty:
@@ -476,6 +498,7 @@ display_cols = [
     "Valuation Score", "Crisis Resilience Score", "Health Score", "Conviction Score",
     "Valuation Status", "Expectations Burden", "Euphoria Veto", "Liquidity Trap",
     "Regime Adjustment", "Technical Multiplier", "Quadrant Sizing Gate",
+    "Prev Quadrant", "Quadrant Momentum Label",
     "Computed Allocation (Pre-Quadrant-Gate) ($)", "Computed Allocation ($)",
 ]
 display_cols = [c for c in display_cols if c in scored.columns]
