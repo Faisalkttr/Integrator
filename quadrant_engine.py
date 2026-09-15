@@ -3,10 +3,18 @@
 Every asset is placed on a 3x3 grid (Technical status x Fundamental
 status), so nothing falls through into an undefined middle zone. A
 valuation halt or euphoria flag still excludes a name from Q1/Q1A/Q1B
-even if Health looks strong - fundamentals veto technicals, not the
+even if the tech axis looks strong - fundamentals veto technicals, not the
 other way around.
 
-Technical status:   Green (Health >= 60), Neutral (40-60), Red (< 40)
+Technical status:   Green/Neutral/Red thresholds (>=60 / 40-60 / <40)
+                     applied to STRUCTURAL HEALTH (70% LT Score / 30%
+                     Health Score - see scoring_engine.compute_structural_health),
+                     not raw Health Score. Chosen for a 15-year thesis:
+                     quadrant membership should reflect structural trend,
+                     not a single quarter's price action. Raw Health Score
+                     keeps driving euphoria_veto, liquidity_trap_veto, the
+                     technical sizing multiplier, and tripwires - those stay
+                     tactical/fast-reacting on purpose.
 Fundamental status:  Green (Conviction >= 65), Neutral (50-65), Red (< 50)
 """
 
@@ -138,9 +146,15 @@ def _fund_status(conviction) -> str:
 
 
 def classify_quadrant(row) -> str:
-    health = row.get("Health Score")
+    # Tech axis uses Structural Health (70% LT / 30% Health) - a 15-year
+    # thesis should be classified on structural trend, not quarterly noise.
+    # Raw Health Score still drives euphoria_veto, liquidity_trap_veto,
+    # technical_multiplier (sizing throttle), and tripwires elsewhere -
+    # those stay tactical on purpose. See compute_structural_health's
+    # docstring in scoring_engine.py.
+    structural_health = row.get("Structural Health Score")
     conviction = row.get("Conviction Score")
-    t = _tech_status(health)
+    t = _tech_status(structural_health)
     f = _fund_status(conviction)
     if t is None or f is None:
         return "Unclassified (missing data)"
