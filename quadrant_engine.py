@@ -66,6 +66,57 @@ QUADRANT_SIZING_GATE = {
 }
 
 
+# --------------------------------------------------------------------------
+# Quadrant Momentum (Phase 1: informational / display only - does not
+# affect Computed Allocation $. See "Phase 2" note in the sizing gate
+# section above if you want it to eventually tilt sizing.)
+# --------------------------------------------------------------------------
+# Rank = position in QUADRANT_ORDER (0 = best, i.e. Q1A). This reuses the
+# ordering already used for the quadrant tabs rather than inventing a
+# second scale. "Unclassified (missing data)" has no rank - momentum is
+# undefined (None), not 0, if either month was unclassified, since "no
+# signal" and "no movement" are different things and shouldn't collapse
+# to the same score.
+QUADRANT_RANK = {
+    name: i for i, name in enumerate(QUADRANT_ORDER)
+    if name != "Unclassified (missing data)"
+}
+
+QUADRANT_MOMENTUM_LABELS = {
+    3: "\u25b2\u25b2 Strong upgrade",
+    2: "\u25b2 Upgrade",
+    0: "Stable",
+    -2: "\u25bc Downgrade",
+    -3: "\u25bc\u25bc Strong downgrade",
+}
+
+
+def quadrant_momentum(previous_quadrant, current_quadrant):
+    """Score a month-over-month quadrant migration.
+
+    +3 = moved up 2+ quadrant ranks (e.g. Q2 -> Q1B), +2 = moved up 1
+    rank (e.g. Q1C -> Q1B), 0 = stable, -2 = moved down 1 rank,
+    -3 = moved down 2+ ranks. Returns None - not 0 - if either quadrant
+    is missing, unrecognized, or "Unclassified (missing data)": a brand
+    new name with no prior-month row should read as "no signal yet",
+    not as "stable".
+    """
+    prev_rank = QUADRANT_RANK.get(previous_quadrant)
+    cur_rank = QUADRANT_RANK.get(current_quadrant)
+    if prev_rank is None or cur_rank is None:
+        return None
+    delta = prev_rank - cur_rank  # positive = moved toward Q1A (up)
+    if delta >= 2:
+        return 3
+    if delta == 1:
+        return 2
+    if delta == 0:
+        return 0
+    if delta == -1:
+        return -2
+    return -3  # delta <= -2
+
+
 def _tech_status(health) -> str:
     if pd.isna(health):
         return None
