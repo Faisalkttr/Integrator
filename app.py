@@ -134,6 +134,32 @@ def load_technical(file, notes: list) -> pd.DataFrame:
             df[col] = parse_money(df[col])
     df["Asset"] = df["Asset"].astype(str).str.strip()
     df = _warn_and_drop_duplicates(df, "Asset", "Technical", notes)
+
+    # Structural Health Score (70% LT / 30% Health, used for quadrant
+    # classification) only means anything if these two are genuinely
+    # independent signals. If the Technical Engine's sidebar "Long-Term
+    # Mode" checkbox was on when this export was generated, Health Score
+    # is set equal to LT Score by that tool's own design - which silently
+    # collapses Structural Health into a duplicate of LT Score alone, and
+    # also means the euphoria/liquidity-trap vetoes and tripwires (which
+    # read raw Health Score) are running on 252-day data instead of the
+    # 63-day tactical signal they're meant to react to.
+    if "Health Score" in df.columns and "LT Score" in df.columns:
+        both = df[["Health Score", "LT Score"]].dropna()
+        if len(both) >= 10:
+            identical_pct = (both["Health Score"] == both["LT Score"]).mean()
+            if identical_pct > 0.95:
+                notes.append((
+                    "warning",
+                    f"**Health Score and LT Score are identical in {identical_pct:.0%} "
+                    "of rows** in this Technical export. This happens when the Technical "
+                    "Engine's '\U0001F6E1\uFE0F Long-Term Mode' checkbox was ON at export time "
+                    "(it sets Health Score = LT Score by design). If that wasn't intended, "
+                    "re-export with Long-Term Mode off - otherwise Structural Health "
+                    "Score collapses to a duplicate of LT Score alone, and the vetoes/"
+                    "tripwires (which read raw Health Score) are reacting to 252-day "
+                    "data instead of 63-day tactical data."
+                ))
     return df
 
 
@@ -153,6 +179,7 @@ def score_merged(
     df["Simon Score (Pre-Penalty)"] = composite.round(1)
     df["Simon Score"] = se.apply_veto_penalties(composite, df["Euphoria Veto"], df["Liquidity Trap"])
 
+    df["Structural Health Score"] = se.compute_structural_health(df)
     df["Quadrant"] = df.apply(qe.classify_quadrant, axis=1)
 
     layer_col = "Layer_fund" if "Layer_fund" in df.columns else "Layer"
@@ -473,15 +500,20 @@ else:
 st.markdown("---")
 
 # ---- Heatmap ----------------------------------------------------------
-st.subheader("\U0001F5FA\ufe0f Health vs. Conviction Heat Map")
+st.subheader("\U0001F5FA\ufe0f Structural Health vs. Conviction Heat Map")
+st.caption(
+    "X-axis is **Structural Health** (70% LT Score / 30% Health Score) - the "
+    "signal that now drives quadrant color. Raw Health Score (tactical, still "
+    "the deployment throttle and tripwire input) is in the hover tooltip."
+)
 plot_df = scored.copy()
 plot_df["Deployment Size"] = plot_df["Computed Allocation ($)"].clip(lower=100)
 fig = px.scatter(
     plot_df,
-    x="Health Score", y="Conviction Score",
+    x="Structural Health Score", y="Conviction Score",
     color="Quadrant", size="Deployment Size",
     hover_name=TECH_KEY,
-    hover_data=["Simon Score", "Computed Allocation ($)", "Valuation Status"],
+    hover_data=["Simon Score", "Health Score", "Computed Allocation ($)", "Valuation Status"],
     color_discrete_map=qe.QUADRANT_COLORS,
     height=550,
 )
@@ -495,7 +527,8 @@ st.markdown("---")
 st.subheader("\U0001F4CB Quadrant breakdown")
 display_cols = [
     TECH_KEY, "Section_tech", "Simon Score", "Momentum Score", "Quality Composite",
-    "Valuation Score", "Crisis Resilience Score", "Health Score", "Conviction Score",
+    "Valuation Score", "Crisis Resilience Score", "Structural Health Score", "Health Score",
+    "Conviction Score",
     "Valuation Status", "Expectations Burden", "Euphoria Veto", "Liquidity Trap",
     "Regime Adjustment", "Technical Multiplier", "Quadrant Sizing Gate",
     "Prev Quadrant", "Quadrant Momentum Label",
